@@ -641,12 +641,36 @@ logger.info(syns[0].name())  # First synonym
 
 
 # features
-# preprocessed_train = feature0_scores(preprocessed_train)
-# preprocessed_train = feature1_scores(preprocessed_train)
-# preprocessed_train = feature2_scores(preprocessed_train)
-# preprocessed_train = feature3_scores(preprocessed_train)
-# preprocessed_train = feature6_scores(preprocessed_train)
-# preprocessed_train = feature7_scores(preprocessed_train)
+preprocessed_train = feature0_scores(preprocessed_train)
+preprocessed_train = feature1_scores(preprocessed_train)
+preprocessed_train = feature2_scores(preprocessed_train)
+preprocessed_train = feature3_scores(preprocessed_train)
+# feature 4 = n_gram_overlap
+preprocessed_train = n_gram_overlap(preprocessed_train, corpus)
+preprocessed_train = feature6_scores(preprocessed_train)
+preprocessed_train = feature7_scores(preprocessed_train)
+
+# Showing results
+show_scores(preprocessed_train, 'scores_norm', 'scores_0', 100)
+show_top_error(preprocessed_train, 'scores_norm', 'scores_0')
+examples = (1, 2, 10, 22)
+show_examples(preprocessed_train, 'scores_norm', 'scores_0', examples)
+
+show_scores(preprocessed_train, 'scores_norm', 'scores_1_eucl', 200)
+show_top_error(preprocessed_train, 'scores_norm', 'scores_1_cos')
+show_scores(preprocessed_train, 'scores_norm', 'scores_1_cos', 200)
+
+show_scores(preprocessed_train, 'scores', 'scores_2', 200)
+
+show_scores(preprocessed_train, 'scores_norm', 'scores_3', 200)
+
+show_scores(preprocessed_train, 'scores_norm', 'scores_4_cosine_2', 100)
+# affichage des score pour le 2-gram (disctance=euclidienne)
+show_scores(preprocessed_train, 'scores', 'scores_4_euclidean_2', 100)
+
+show_scores(preprocessed_train, 'scores_norm', 'scores_6', 100)
+
+show_scores(preprocessed_train, 'scores_norm', 'scores_7', 100)
 
 # Extract features
 def extract_features(dataset):
@@ -742,29 +766,6 @@ def test_models_with_feature_combinations(dataset, preprocess_function, postproc
 
     return pd.DataFrame(results)
 
-# Showing results
-show_scores(preprocessed_train, 'scores_norm', 'scores_0', 100)
-show_top_error(preprocessed_train, 'scores_norm', 'scores_0')
-examples = (1, 2, 10, 22)
-show_examples(preprocessed_train, 'scores_norm', 'scores_0', examples)
-
-show_scores(preprocessed_train, 'scores_norm', 'scores_1_eucl', 200)
-show_top_error(preprocessed_train, 'scores_norm', 'scores_1_cos')
-show_scores(preprocessed_train, 'scores_norm', 'scores_1_cos', 200)
-
-show_scores(preprocessed_train, 'scores', 'scores_2', 200)
-
-show_scores(preprocessed_train, 'scores_norm', 'scores_3', 200)
-
-show_scores(preprocessed_train, 'scores_norm', 'scores_4_cosine_2', 100)
-# affichage des score pour le 2-gram (disctance=euclidienne)
-show_scores(preprocessed_train, 'scores', 'scores_4_euclidean_2', 100)
-
-show_scores(preprocessed_train, 'scores_norm', 'scores_6', 100)
-
-show_scores(preprocessed_train, 'scores_norm', 'scores_7', 100)
-
-
 another_set = {
     'train': dataset['train'],
     'test': dataset['test']
@@ -772,9 +773,9 @@ another_set = {
 
 models_to_test = [LinearRegression, Ridge, DecisionTreeRegressor]
 
-logger.debug(f"Starting to combine model. Models: %s", models_to_test)
+# logger.debug(f"Starting to combine model. Models: %s", models_to_test)
 
-results_df = test_models_with_feature_combinations(
-    another_set, extract_features, post_process_data, models_to_test)
+# results_df = test_models_with_feature_combinations(
+#     another_set, extract_features, post_process_data, models_to_test)
 
-results_df
+# results_df
