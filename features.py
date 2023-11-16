@@ -1,5 +1,6 @@
 from collections import Counter
 import logging
+from logging.handlers import TimedRotatingFileHandler
 from math import log
 import os
 import string
@@ -33,11 +34,17 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.tree import DecisionTreeRegressor
 from wordfreq import zipf_frequency
 
-nltk.download('wordnet')
-nltk.download('averaged_perceptron_tagger')
-nltk.download('wordnet')
-nltk.download('punkt')
-nltk.download('stopwords')
+# if punkt is missing we download all packages
+try:
+    nltk.data.find('tokenizers/punkt')
+except LookupError:
+    nltk.download('punkt')
+    nltk.download('punkt')
+    nltk.download('stopwords')
+    nltk.download('wordnet')
+    nltk.download('averaged_perceptron_tagger')
+    nltk.download('wordnet')
+
 
 def load_data():
     data = dict()
@@ -45,8 +52,7 @@ def load_data():
         if fn.endswith(".csv"):
             with open("stsbenchmark/" + fn) as f:
                 subset = fn[:-4].split("-")[1]
-                # print(subset)
-                print("subset", subset)
+                logger.info(f"subset: %s", subset)
                 data[subset] = dict()
                 data[subset]['data'] = []
                 data[subset]['scores'] = []
@@ -57,103 +63,6 @@ def load_data():
                     data[subset]['scores'].append(float(l[4]))
     return data
 
-
-dataset = load_data()
-
-# Having a look at the data...
-
-print("\nSome examples from the dataset:")
-for i in range(5):
-    print("s1:", dataset['train']['data'][i][0])
-    print("s2:", dataset['train']['data'][i][1])
-    print("score:", dataset['train']['scores'][i], "\n")
-
-print("\nNumber of sentence pairs by subset:")
-for subset in dataset:
-    print(subset, len(dataset[subset]['data']))
-
-print("\nRange of scores in the training set:", min(
-    dataset["train"]["scores"]), "-", max(dataset["train"]["scores"]))
-
-#!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-#       fonction ne marche pas
-
-def count_unique(df):
-    df['merged_sentences'] = df['s1'] + " " + df['s2']
-    # Utilisez un ensemble (set) pour stocker les mots uniques
-    unique_words_set = set()
-
-    # Parcourez chaque phrase et ajoutez les mots à l'ensemble
-    for word_list in df['merged_sentences']:
-        words = word_list.split()
-        unique_words_set.update(words)
-
-    # Comptez la taille de l'ensemble pour obtenir le nombre de mots uniques
-    num_unique_words = len(unique_words_set)
-
-    # Affichez le nombre de mots uniques
-    print(f"Nombre de mots uniques dans le DataFrame : {num_unique_words}")
-
-df_train = pd.DataFrame(dataset['train'])
-df_train[['s1', 's2']] = df_train['data'].apply(lambda x: pd.Series(x))
-
-df_train.head(15)
-
-# ┌─────────────────────┐ 
-# │ Word count baseline │
-# └─────────────────────┘
-
-# word overlap baseline
-def baseline_features(data):
-    x = []
-    for s1, s2 in data:
-        # binary=True because we use Jaccard score (we want presence/absence information, not counts)
-        cv = CountVectorizer(binary=True)
-        vectors = cv.fit_transform([s1, s2]).toarray()
-        x.append(jaccard_score(vectors[0], vectors[1]))
-    return np.array(x).reshape(-1, 1)
-
-baseline_features(df_train['data'])
-
-df_train.describe()
-
-# ┌────────────┐ 
-# │ Evaluation │
-# └────────────┘
-
-# evaluation function: it returns Pearson's r
-def evaluate(predictions, gold_standard):
-    return pearsonr(predictions, gold_standard)[0]
-
-# Mapping the scores from the [0,5] to the [0,1] range for convenience
-train_y = np.array(dataset['train']['scores']) / 5
-dev_y = np.array(dataset['dev']['scores']) / 5
-test_y = np.array(dataset['test']['scores']) / 5
-
-train_baseline_x = baseline_features(dataset['train']['data'])
-test_baseline_x = baseline_features(dataset['test']['data'])
-
-# Having a look at the features and y
-print(train_baseline_x[:10])
-print(train_y[:10])
-print("Checking the correlation of the word overlap feature with the gold standard scores on the training set:",
-      pearsonr(train_baseline_x.squeeze(), train_y))
-
-# Initializing the model
-linreg = LinearRegression()
-# Training
-linreg.fit(train_baseline_x, train_y)
-# Predicting
-predictions = linreg.predict(test_baseline_x)
-# Evaluating
-print("Pearson's r obtained on the test set:", evaluate(predictions, test_y))
-
-# ┌───────────────────────────────────────────────────────┐ 
-# │1) A model using simple linguistic and textual features│
-# └───────────────────────────────────────────────────────┘
-
-# 1.1 Pre-processing
-# Preprocess all the data
 
 def preprocess_sentence(sentence):
     stemmer = PorterStemmer()
@@ -199,25 +108,13 @@ def preprocess_dataset(dataset):
     # Get the index labels that were dropped
     dropped_indexes = index_before_dropna.difference(index_after_dropna)
 
-    print("Indices dropped:")
-    print(dropped_indexes)
+    logger.info("Indices dropped:")
+    logger.info(dropped_indexes)
 
     return df
 
-pp = preprocess_sentence('what a nice hat you have')
-print(pp, type(pp))
-
-test = preprocess_dataset(dataset['test'])
-
-test.iloc[632].s1_pp
-
-preprocessed_train = preprocess_dataset(dataset['train'])
-print('Colonnes :', preprocessed_train.columns)
-preprocessed_train.head()
-
-
-
 # helper function that gets the corpus, the words, the vocabulary (unique words)
+
 
 def get_corpus(preprocessed_train):
     # récupère toutes les phrases du corpus (format string)
@@ -279,53 +176,15 @@ def min_max_normalization_series(series):
     normalized_series = (series - min_val) / (max_val - min_val)
     return normalized_series
 
-corpus = get_corpus(preprocessed_train)
-print(len(corpus), '\n', corpus)
 
-# Analyse du corpus
-print('ANALYSE DU CORPUS\n==================')
-N = preprocessed_train.shape[0]
-print('Nombre de paire de phrases :', N)
-print('Nombre de phrases (s1 et s2):', 2*N)
-
-words = get_words(preprocessed_train['sm'])
-print('\nnombre de mots :', len(words),
-      ' (soit en moyenne ', round(len(words)/N/2), 'mots /phrase)')
-vocabulary = get_vocabulary(words)
-print('nombre de mots uniques :', len(vocabulary))
-print('chaque mot du vocabulaire est utilisé en moyenne',
-      round(len(words)/len(vocabulary), 1))
-
-words_pp = get_words(preprocessed_train['token_m'])
-print('\nnombre de mots (après pre-processing) :', len(words_pp),
-      ' (soit en moyenne ', round(len(words_pp)/N/2), 'mots /phrase)')
-vocabulary_pp = get_vocabulary(words_pp)
-print('nombre de mots uniques (après pre-processing) :', len(vocabulary_pp))
-print('chaque mot du vocabulaire est utilisé en moyenne',
-      round(len(words_pp)/len(vocabulary_pp), 1))
-
-# test de get_words et get_vocabulary sur les premieres phrases s1
-test = preprocessed_train['token_1'][0:5]
-# print(type(test))
-print(test)  # test.shape
-
-words_test = get_words(test)
-print('\nwords :', len(words_test), ' mots \n', words_test)
-vocabulary_test = get_vocabulary(test)
-print('\nvocabulary (unique):', len(vocabulary_test),
-      ' mots uniques \n', vocabulary_test)
-
-# we can choose either pair_1 or pair_2 to test our
-# feature on both a good and a bad similarity example
-
-pair_1 = ('man hit man stick', 'man spank man stick')
-pair_2 = ('man run road', 'panda dog run road')
-
-s1, s2 = pair_1
-
-# représentation graphique des scores obtenus
-import matplotlib.pyplot as plt
-
+def MSE(X, Y):
+    if len(X) == len(Y):
+        npX = np.array(X)
+        npY = np.array(Y)
+        MSE = ((npY - npX.mean())**2).sum()/len(npX)
+    else:
+        "les deux vecteurs fournis doivent etre de meme dimension pour calculer le MSE"
+    return MSE
 
 def coeff_colelation(X, Y):
     if len(X) == len(Y):
@@ -336,16 +195,6 @@ def coeff_colelation(X, Y):
         "les deux vecteurs fournis doivent etre de meme dimension pour calculer le coefficient de corrélation"
     coeff = cov / (npX.std()*npY.std())
     return coeff
-
-
-def MSE(X, Y):
-    if len(X) == len(Y):
-        npX = np.array(X)
-        npY = np.array(Y)
-        MSE = ((npY - npX.mean())**2).sum()/len(npX)
-    else:
-        "les deux vecteurs fournis doivent etre de meme dimension pour calculer le MSE"
-    return MSE
 
 def show_stats(df, initial, feature):
     X = df[str(initial)]
@@ -360,7 +209,6 @@ def show_stats(df, initial, feature):
     print('Le coefficient de corélation de "', str(initial), '" et "',
           str(feature), '" est :', round(coeff_colelation(X, Y), 2))
     print('Le MSE est de :', round(MSE(X, Y), 2))
-
 
 def show_examples(df, initial, feature, lst=(1, 2, 10, 22)):
     X = df[str(initial)]
@@ -381,7 +229,6 @@ def show_examples(df, initial, feature, lst=(1, 2, 10, 22)):
             print('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!',
                   '\n!!!     ATTENTION SCORE =', Y[i], ' (> 1)     !!!',
                   '\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
-
 
 def show_scores(df, initial, feature, number, start=-1):
     # permet de choisir les données à afficher
@@ -418,9 +265,6 @@ def show_scores(df, initial, feature, number, start=-1):
     plt.plot(X_show, label='Score')
     plt.plot(Y_show, label='feature score')
     plt.plot(error_show, ".", label='error', color='grey')
-    # plt.plot(initial.head(number), label = 'Score')
-    # plt.plot(feature.head(number), label = 'feature score')
-    # plt.plot(error.head(number), ".", label = 'error', color = 'grey')
     plt.xlabel(str(number) + selection_type, fontsize=10)
     plt.ylabel('Score (entre 0 et ' + str(y_max)+')', fontsize=10)
     plt.title('\nComparaison du score de \"' + str(feature) +
@@ -431,30 +275,7 @@ def show_scores(df, initial, feature, number, start=-1):
     plt.plot((x_min, x_max), (error.mean(), error.mean()),
              color='grey', linestyle=':', label='erreur moyenne')
     plt.legend(bbox_to_anchor=(1, 1))
-
-# show max errors in a list and return indexes
-
-lst = [1, 5, 2, 3, 10]
-sorted_indexes = sorted(range(len(lst)), key=lambda i: lst[i], reverse=True)
-top_3_indexes = sorted_indexes[:3]
-top_3 = sorted(lst)[-3:]
-print('top 3 des erreurs:', top_3)
-print('Erreur de ', top_3[-1], ' à l\'indice ',
-      lst.index(top_3[-1]), ' couple :')
-print('Erreur de ', top_3[-2], ' à l\'indice ',
-      lst.index(top_3[-2]), ' couple :')
-print('Erreur de ', top_3[-3], ' à l\'indice ',
-      lst.index(top_3[-3]), ' couple :')
-
-lst = np.array([1, 5, 2, 3, 10])
-top_3_show = sorted(lst, reverse=True)[:3]
-print('top 3 des erreurs:', top_3_show)
-top_3_show_index = [(np.where(lst == top_3[0])[0])[0],
-                    (np.where(lst == top_3[1])[0])[0],
-                    (np.where(lst == top_3[2])[0])[0]]
-print('indices des top 3', top_3_show_index)
-# np.where(lst==top_3[-1])[0]
-# print((np.where(lst==top_3[-2])[0])[0])
+    plt.show()
 
 def get_top_error(lst, n=3):
     lst = np.array(lst)
@@ -473,11 +294,6 @@ def show_top_error(df, initial, feature):
     top_error_index = get_top_error(temp['error'])
     return temp.iloc[top_error_index, :]
 
-
-A = [1, 5, 2, 3, 10, 5]
-get_top_error(A)
-
-# O Jaquard score
 # the function given to compute the jaccard_score score doesn't work as is for the dataframe
 # it's (barely) rewritten here to make it work
 def feature0_scores(df):
@@ -488,9 +304,9 @@ def feature0_scores(df):
             s1 = df["s1_pp"][i]
         # s1 = df['s1'][i]
         except:
-            print(f"error while trying to access: df[\"s1_pp\"][{i}]")
-            print(f"before: {i-1}, Valeur: {df['s1'][i-1]}")
-            print(f"df[\"s1_pp\"].length: {len(df['s1_pp'])}")
+            logger.info(f"error while trying to access: df[\"s1_pp\"][{i}]")
+            logger.info(f"before: {i-1}, Valeur: {df['s1'][i-1]}")
+            logger.info(f"df[\"s1_pp\"].length: {len(df['s1_pp'])}")
 
             exit()
         s2 = df["s2_pp"][i]
@@ -506,14 +322,6 @@ def feature0_scores(df):
     df["scores_0"] = x
     return df
 
-preprocessed_train = feature0_scores(preprocessed_train)
-show_scores(preprocessed_train, 'scores_norm', 'scores_0', 100)
-show_top_error(preprocessed_train, 'scores_norm', 'scores_0')
-examples = (1, 2, 10, 22)
-show_examples(preprocessed_train, 'scores_norm', 'scores_0', examples)
-
-# 1) _word to word comparison_
-# having vocabulary based on the 2 sentences, compute the scalar product of frequency of each token (and covariance?)
 
 def feature1_scores(df, count_w=True):
     # if count_w=False will return a vector with number of occurence
@@ -553,28 +361,8 @@ def build_frequency_vector(vocab_as_list, sentence):
     return frequency_vectors_sentence
 
 
-preprocessed_train = feature1_scores(preprocessed_train)
-preprocessed_train.columns
-show_scores(preprocessed_train, 'scores_norm', 'scores_1_eucl', 200)
-show_top_error(preprocessed_train, 'scores_norm', 'scores_1_cos')
-show_scores(preprocessed_train, 'scores_norm', 'scores_1_cos', 200)
-
-# 2) _word to synonym comparison_
-#    get synonyms (uses WordNet) of each token of sentence1
-#    for each token of sentence2:
-#    look up token in list of synonyms
-#    return 1 if a synonym is found
-
-from nltk.corpus import wordnet
-nltk.download('wordnet')
-
-
 def find_synonyms(word):
     return [syn for synset in wordnet.synonyms(word) for syn in synset]
-
-
-syns = wordnet.synsets("program")
-print(syns[0].name())  # First synonym
 
 
 def feature2_scores(df):
@@ -596,17 +384,6 @@ def feature2_scores(df):
 
     return df
 
-
-preprocessed_train = feature2_scores(preprocessed_train)
-preprocessed_train.head()
-plt.hist(preprocessed_train['scores_2'])
-plt.show()
-print(np.mean(preprocessed_train['scores_2']))
-print(np.median(preprocessed_train['scores_2']))
-show_scores(preprocessed_train, 'scores', 'scores_2', 200)
-
-# 3) 3) _corpus frequency comparison_ TF-IDF:
-# use the whole training set as corpus & each sentence as a document
 
 def feature3_scores(df):
 
@@ -638,17 +415,10 @@ def feature3_scores(df):
         df.loc[i, 'scores_3'] = cosine_similarity_score
     return df
 
-
-preprocessed_train = feature3_scores(preprocessed_train)
-
-show_scores(preprocessed_train, 'scores_norm', 'scores_3', 200)
-preprocessed_train.head(3)
-
-# 4) _N-gram overlap (word to word)_:
-# use CountVectorizer with ngram=2 then 3 (try with 1, which should give a score close to feature 1.) then compute euclidian or cosine distance
-
 # First of all, I need some helper functions
 # Especially helpful for feature 5 code
+
+
 def find_synonyms(word):
     return [syn for synset in wordnet.synonyms(word) for syn in synset]
 
@@ -663,7 +433,7 @@ def replace_with_synonyms(s1, s2):
         syn_found = False
         synonyms_list = find_synonyms(token)
         for syn in synonyms_list:
-            # print(syn)
+            # logger.info(syn)
             if syn.lower() in s1_tokens:
                 replaced_s2_tokens.append(syn.lower())
                 syn_found = True
@@ -672,6 +442,7 @@ def replace_with_synonyms(s1, s2):
             replaced_s2_tokens.append(token)
 
     return ' '.join(replaced_s2_tokens)
+
 
 def n_gram_overlap(df, corpus, synonym_based=False):
     # Create a CountVectorizer with different N-gram values (1, 2, and 3)
@@ -709,22 +480,6 @@ def n_gram_overlap(df, corpus, synonym_based=False):
 
     return df
 
-preprocessed_train = n_gram_overlap(preprocessed_train, corpus)
-preprocessed_train.head()
-# affichage des score pour le 2-gram (disctance=cosine)
-show_scores(preprocessed_train, 'scores_norm', 'scores_4_cosine_2', 100)
-# affichage des score pour le 2-gram (disctance=euclidienne)
-show_scores(preprocessed_train, 'scores', 'scores_4_euclidean_2', 100)
-
-preprocessed_train = n_gram_overlap(
-    preprocessed_train, corpus, synonym_based=True)
-
-preprocessed_train.head()
-
-# 6) _weighted word to synonym comparison (weight: syntactic and/or polysemy and/or similarity score)_:
-# compute a score based on part-of-speech (verbs, nouns  het a high score, adverbs a lower score and the rest the lowest score)
-#    compute a score based on synset number (eg. 1 / (number of synsets) ) This gives a weight to words with only 1 synonym, we're supposing that they are more information-rich
-#    compute frequency of tokens, weighted by the 2 scores we have (multiple scores can be computed: weight with just p-o-s, just synset number and both)
 
 def similarity(a: float, b: float) -> float:
     return 1 - abs(a - b) / max(abs(a), abs(b), 1)
@@ -796,16 +551,6 @@ def feature6_scores(preprocessed_data):
     return preprocessed_data
 
 
-preprocessed_train = feature6_scores(preprocessed_train)
-score_pos_logit = np.vectorize(logit)(preprocessed_train['scores_6'])
-
-show_scores(preprocessed_train, 'scores_norm', 'scores_6', 100)
-# plt.plot(score_pos_logit)
-plt.show()
-
-# 7) _speech frequency comparison_:
-#  using wordfreq, we analyze the frequency of the word in the whole language
-
 def custom_tfidf(words):
     """This compute the tf idf score of each word in a list of words
 
@@ -856,10 +601,74 @@ def feature7_scores(preprocessed_data):
 
     return preprocessed_data
 
+
+debug_formatter = logging.Formatter(
+    '%(asctime)s | %(levelname)-8s | %(filename)s.%(funcName)s l.%(lineno)d | %(message)s')
+debug_file_handler = TimedRotatingFileHandler(
+    filename="features.log", when='midnight', backupCount=31)
+debug_file_handler.setFormatter(debug_formatter)
+debug_file_handler.setLevel(logging.DEBUG)
+logger = logging.getLogger("features")
+logger.setLevel(logging.DEBUG)
+logger.addHandler(debug_file_handler)
+
+
+dataset = load_data()
+pp = preprocess_sentence('what a nice hat you have')
+logger.info(f"%s : %s", pp, type(pp))
+test = preprocess_dataset(dataset['test'])
+preprocessed_train = preprocess_dataset(dataset['train'])
+logger.info(f"Colonnes : %s", preprocessed_train.columns)
+preprocessed_train.head()
+
+corpus = get_corpus(preprocessed_train)
+# logger.info(f"%s \n %s", len(corpus), corpus)
+
+# test de get_words et get_vocabulary sur les premieres phrases s1
+test = preprocessed_train['token_1'][0:5]
+# logger.info(type(test))
+logger.info(test)  # test.shape
+
+words_test = get_words(test)
+logger.info(f"\nwords: %s mots\n %s", len(words_test), words_test)
+vocabulary_test = get_vocabulary(test)
+logger.info(f"\nvocabulary (unique): %s mots uniques \n %s",
+            len(vocabulary_test), vocabulary_test)
+
+
+syns = wordnet.synsets("program")
+logger.info(syns[0].name())  # First synonym
+
+
+# features
+preprocessed_train = feature0_scores(preprocessed_train)
+preprocessed_train = feature1_scores(preprocessed_train)
+preprocessed_train = feature2_scores(preprocessed_train)
+preprocessed_train = feature3_scores(preprocessed_train)
+# feature 4 = n_gram_overlap
+preprocessed_train = n_gram_overlap(preprocessed_train, corpus)
+preprocessed_train = feature6_scores(preprocessed_train)
 preprocessed_train = feature7_scores(preprocessed_train)
-plt.plot(preprocessed_train['scores_7'])
-plt.title('similarity scores between wordfreq_tfidf_1 and wordfreq_tfidf_2')
-plt.show()
+
+# Showing results
+show_scores(preprocessed_train, 'scores_norm', 'scores_0', 100)
+show_top_error(preprocessed_train, 'scores_norm', 'scores_0')
+examples = (1, 2, 10, 22)
+show_examples(preprocessed_train, 'scores_norm', 'scores_0', examples)
+
+show_scores(preprocessed_train, 'scores_norm', 'scores_1_eucl', 200)
+show_top_error(preprocessed_train, 'scores_norm', 'scores_1_cos')
+show_scores(preprocessed_train, 'scores_norm', 'scores_1_cos', 200)
+
+show_scores(preprocessed_train, 'scores', 'scores_2', 200)
+
+show_scores(preprocessed_train, 'scores_norm', 'scores_3', 200)
+
+show_scores(preprocessed_train, 'scores_norm', 'scores_4_cosine_2', 100)
+# affichage des score pour le 2-gram (disctance=euclidienne)
+show_scores(preprocessed_train, 'scores', 'scores_4_euclidean_2', 100)
+
+show_scores(preprocessed_train, 'scores_norm', 'scores_6', 100)
 
 show_scores(preprocessed_train, 'scores_norm', 'scores_7', 100)
 
@@ -881,8 +690,7 @@ def extract_features(dataset):
 
     return preprocessed_dataset
 
-# 8) Post processing
-# Centering & normalizing scores
+
 def post_process_data(df):
     # select columns that need post-processing: those that start with 'scores_'
     # Ahmed here : I suggest to just drop the columns that we don't need by name
@@ -897,15 +705,9 @@ def post_process_data(df):
     ).fit_transform(df[columns_to_normalize])
     return df
 
-postprocessed_train = post_process_data(preprocessed_train)
-
-# 1.3) Choose models from sklearn
-logging.basicConfig(filename='nlp_model_permutation.log',
-                    encoding='utf-8', level=logging.DEBUG,
-                    format='%(asctime)s | %(levelname)-8s | %(filename)s.%(funcName)s l.%(lineno)d | %(message)s')
-
 # Build and train different models. You can do a little feature ablation (i.e. removing one feature at a time)
 # to see the usefulness of the different features.
+
 
 def test_models_with_feature_combinations(dataset, preprocess_function, postprocess_function, models):
     results = []
@@ -928,16 +730,27 @@ def test_models_with_feature_combinations(dataset, preprocess_function, postproc
     score_to_predict = postprocessed_train['scores']
     score_to_verify = postprocessed_test['scores']
 
+    logger.debug(f"score_to_predict.keys: %s", score_to_predict.keys())
+
     # Iterate over all combinations of features
     for r in range(1, len(train_features) + 1):
+        logger.debug(f"r: %s", r)
         for feature_combination in combinations(train_features, r):
+            logger.debug(
+                f"feature_combination: %s", feature_combination)
+            if len(feature_combination) > 3:
+                raise RuntimeError("STOP, hammer time!")
+
             train_x = postprocessed_train[list(feature_combination)]
             test_x = postprocessed_test[list(feature_combination)]
 
             for model in models:
-                logging.debug(
+                logger.debug(
                     f"model: {model}, features: {feature_combination}")
                 model_instance = model()
+                logger.debug(f"train_x.shape: %s", train_x.shape)
+                logger.debug(f"score_to_predict.shape: %s",
+                             score_to_predict.shape)
                 model_instance.fit(train_x, score_to_predict)
                 predictions = model_instance.predict(test_x)
 
@@ -953,7 +766,6 @@ def test_models_with_feature_combinations(dataset, preprocess_function, postproc
 
     return pd.DataFrame(results)
 
-
 another_set = {
     'train': dataset['train'],
     'test': dataset['test']
@@ -961,7 +773,9 @@ another_set = {
 
 models_to_test = [LinearRegression, Ridge, DecisionTreeRegressor]
 
-results_df = test_models_with_feature_combinations(
-    another_set, extract_features, post_process_data, models_to_test)
+# logger.debug(f"Starting to combine model. Models: %s", models_to_test)
 
-results_df
+# results_df = test_models_with_feature_combinations(
+#     another_set, extract_features, post_process_data, models_to_test)
+
+# results_df
