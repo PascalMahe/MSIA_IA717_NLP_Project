@@ -1,0 +1,50 @@
+download the stsbenchmark:
+
+wget http://ixa2.si.ehu.es/stswiki/images/4/48/Stsbenchmark.tar.gz
+tar -xvzf Stsbenchmark.tar.gz
+
+# Pour éviter le calcule des embeddings à chaque fois, on peut les sauvegarder sur le disque en utilisant le code suivant:
+    save_numpy_array(embeddings, 'embeddings.npy')
+    load_numpy_array('embeddings.npy')
+## On pourra voir l'utilisation dans test_models_with_feature_combinations.
+
+
+# Usage de la fonction test_models_with_feature_combinations
+La fonction execute en parallele les étapes suivantes:
+1. Chargement des données
+2. Création des embeddings
+3. Création des features
+4. Entrainement des modèles(LinearRegression, RidgeCV, DecisionTreeRegressor, LassoCV, ElasticNetCV)
+6. Le résultat est sauvegardé dans un fichier pickle.
+7. affichage du top10 des meilleurs modèles.
+
+
+Ci-dessous un prompt GPT pour plus de précision sur les raisons de la sélections des modéles. 
+
+When considering whether to try out combinations of features for different models, it's important to understand the characteristics of each model, especially in terms of how they handle feature selection and regularization. Let's look at the models you've mentioned:
+
+1. **LinearRegression**:
+   - Linear Regression does not have any built-in feature selection or regularization.
+   - Trying out different combinations of features can be beneficial, especially if there is a suspicion of irrelevant or redundant features in the dataset.
+
+2. **RidgeCV**:
+   - RidgeCV is a version of Ridge Regression with built-in cross-validation to determine the regularization strength (`alpha`).
+   - It uses L2 regularization which can shrink coefficients but doesn’t set them to zero. This means all features are kept in the model.
+   - While RidgeCV handles multicollinearity well, experimenting with feature combinations might still be useful, especially if some features are known to be irrelevant.
+
+3. **DecisionTreeRegressor**:
+   - Decision trees inherently perform feature selection by choosing the most informative features to split on at each node.
+   - They are less sensitive to irrelevant features compared to linear models.
+   - Trying out different feature combinations might be less beneficial for Decision Trees unless you have a specific reason to believe that certain features might be causing overfitting.
+
+4. **LassoCV**:
+   - LassoCV is Lasso Regression with built-in cross-validation. It uses L1 regularization which can zero out coefficients for some features, effectively performing feature selection.
+   - LassoCV is generally good at dealing with irrelevant features, making the testing of feature combinations less critical.
+   - However, if the dataset is large or complex, experimenting with feature subsets can still be insightful.
+
+5. **ElasticNetCV**:
+   - ElasticNetCV combines L1 and L2 regularization, providing a balance between Ridge and Lasso Regression.
+   - Like LassoCV, it can also perform feature selection by setting some coefficients to zero.
+   - The need to try out different feature combinations is lessened but can still be relevant in certain contexts, such as highly dimensional datasets.
+
+In summary, for models like Linear Regression and RidgeCV, testing different feature combinations can be more beneficial as they do not inherently perform feature selection. For DecisionTreeRegressor, LassoCV, and ElasticNetCV, the built-in feature selection mechanisms reduce the need for manual feature combination testing, but it can still be useful in certain scenarios, such as with highly dimensional data or specific domain requirements.

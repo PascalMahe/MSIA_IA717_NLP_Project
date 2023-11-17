@@ -1,12 +1,6 @@
 from collections import Counter
-import logging
-from logging.handlers import TimedRotatingFileHandler
-from math import log
 import os
-import string
 from string import punctuation
-from string import Template
-import copy
 
 from itertools import combinations
 import numpy as np
@@ -23,16 +17,18 @@ from scipy.spatial.distance import cosine, euclidean
 from scipy.stats import pearsonr
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.feature_extraction.text import CountVectorizer
-from sklearn.linear_model import LinearRegression
-from sklearn.linear_model import LinearRegression, Ridge
 from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.metrics.pairwise import cosine_similarity, euclidean_distances
 from sklearn.metrics import jaccard_score
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import MinMaxScaler
 from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LinearRegression, RidgeCV, LassoCV, ElasticNetCV
 from sklearn.tree import DecisionTreeRegressor
 from wordfreq import zipf_frequency
+from multiprocessing import shared_memory
+from concurrent.futures import ProcessPoolExecutor
+from logger import logger
+from sklearn.utils.validation import check_is_fitted
+from sklearn.exceptions import NotFittedError
 
 # if punkt is missing we download all packages
 try:
@@ -71,6 +67,13 @@ def preprocess_sentence(sentence):
     # stemming and removing stop words
     stemmed_tokens = [stemmer.stem(token) for token in tokens if not token in set(
         stopwords.words('english'))]
+    
+    for token in stemmed_tokens:
+        if token == "n t":
+            token="not"
+        elif token == "m":
+           token = "am"
+
     # remove punctuations
     filtered_tokens = [
         token for token in stemmed_tokens if token not in punctuation]
@@ -90,7 +93,7 @@ def preprocess_dataset(dataset):
     df['s1_pp'] = df['token_1'].apply(' '.join)  # string
     df['s2_pp'] = df['token_2'].apply(' '.join)  # string
     df['sm_pp'] = df['token_m'].apply(' '.join)  # string
-    df['scores_norm'] = df['scores'] / 5  # normalisation du score entre 0 et 1
+    df['GroundTruthScore'] = df['scores'] / 5  # normalisation du score entre 0 et 1
     # Replace empty strings with NaN
     df.replace('', np.nan, inplace=True)
 
@@ -112,6 +115,20 @@ def preprocess_dataset(dataset):
     logger.info(dropped_indexes)
 
     return df
+
+    
+def save_numpy_array(array, filename):
+    
+    #save numpy array
+    np.save(filename, array)
+    
+def load_numpy_array(filename):
+    if filename is None:
+        raise ValueError("filename must be a non empty string")
+    
+    #load numpy array
+    return np.load(filename)
+
 
 # helper function that gets the corpus, the words, the vocabulary (unique words)
 
@@ -348,7 +365,7 @@ def feature1_scores(df, count_w=True):
 
         np.seterr(all="warn")
         # df.loc[i, 'scores_1_eucl'] = d_eucl_linalg
-        df.loc[i, 'scores_1_eucl'] = d_eucl
+        #df.loc[i, 'scores_1_eucl'] = d_eucl
         df.loc[i, 'scores_1_cos'] = d_cos
     return df
 
@@ -472,10 +489,10 @@ def n_gram_overlap(df, corpus, synonym_based=False):
 
         # Create new columns in the data frame
         if synonym_based:
-            df[f'scores_5_euclidean_{i+1}_syn'] = euclidians
+            #df[f'scores_5_euclidean_{i+1}_syn'] = euclidians
             df[f'scores_5_cosine_{i+1}_syn'] = cosines
         else:
-            df[f'scores_4_euclidean_{i+1}'] = euclidians
+            #df[f'scores_4_euclidean_{i+1}'] = euclidians
             df[f'scores_4_cosine_{i+1}'] = cosines
 
     return df
@@ -601,77 +618,6 @@ def feature7_scores(preprocessed_data):
 
     return preprocessed_data
 
-
-debug_formatter = logging.Formatter(
-    '%(asctime)s | %(levelname)-8s | %(filename)s.%(funcName)s l.%(lineno)d | %(message)s')
-debug_file_handler = TimedRotatingFileHandler(
-    filename="features.log", when='midnight', backupCount=31)
-debug_file_handler.setFormatter(debug_formatter)
-debug_file_handler.setLevel(logging.DEBUG)
-logger = logging.getLogger("features")
-logger.setLevel(logging.DEBUG)
-logger.addHandler(debug_file_handler)
-
-
-dataset = load_data()
-pp = preprocess_sentence('what a nice hat you have')
-logger.info(f"%s : %s", pp, type(pp))
-test = preprocess_dataset(dataset['test'])
-preprocessed_train = preprocess_dataset(dataset['train'])
-logger.info(f"Colonnes : %s", preprocessed_train.columns)
-preprocessed_train.head()
-
-corpus = get_corpus(preprocessed_train)
-# logger.info(f"%s \n %s", len(corpus), corpus)
-
-# test de get_words et get_vocabulary sur les premieres phrases s1
-test = preprocessed_train['token_1'][0:5]
-# logger.info(type(test))
-logger.info(test)  # test.shape
-
-words_test = get_words(test)
-logger.info(f"\nwords: %s mots\n %s", len(words_test), words_test)
-vocabulary_test = get_vocabulary(test)
-logger.info(f"\nvocabulary (unique): %s mots uniques \n %s",
-            len(vocabulary_test), vocabulary_test)
-
-
-syns = wordnet.synsets("program")
-logger.info(syns[0].name())  # First synonym
-
-
-# features
-preprocessed_train = feature0_scores(preprocessed_train)
-preprocessed_train = feature1_scores(preprocessed_train)
-preprocessed_train = feature2_scores(preprocessed_train)
-preprocessed_train = feature3_scores(preprocessed_train)
-# feature 4 = n_gram_overlap
-preprocessed_train = n_gram_overlap(preprocessed_train, corpus)
-preprocessed_train = feature6_scores(preprocessed_train)
-preprocessed_train = feature7_scores(preprocessed_train)
-
-# Showing results
-show_scores(preprocessed_train, 'scores_norm', 'scores_0', 100)
-show_top_error(preprocessed_train, 'scores_norm', 'scores_0')
-examples = (1, 2, 10, 22)
-show_examples(preprocessed_train, 'scores_norm', 'scores_0', examples)
-
-show_scores(preprocessed_train, 'scores_norm', 'scores_1_eucl', 200)
-show_top_error(preprocessed_train, 'scores_norm', 'scores_1_cos')
-show_scores(preprocessed_train, 'scores_norm', 'scores_1_cos', 200)
-
-show_scores(preprocessed_train, 'scores', 'scores_2', 200)
-
-show_scores(preprocessed_train, 'scores_norm', 'scores_3', 200)
-
-show_scores(preprocessed_train, 'scores_norm', 'scores_4_cosine_2', 100)
-# affichage des score pour le 2-gram (disctance=euclidienne)
-show_scores(preprocessed_train, 'scores', 'scores_4_euclidean_2', 100)
-
-show_scores(preprocessed_train, 'scores_norm', 'scores_6', 100)
-
-show_scores(preprocessed_train, 'scores_norm', 'scores_7', 100)
-
 # Extract features
 def extract_features(dataset):
     preprocessed_dataset = preprocess_dataset(dataset)
@@ -705,77 +651,205 @@ def post_process_data(df):
     ).fit_transform(df[columns_to_normalize])
     return df
 
-# Build and train different models. You can do a little feature ablation (i.e. removing one feature at a time)
-# to see the usefulness of the different features.
+
+def shared_memory_array(data):
+    # Create shared memory and copy data into it
+    shm = shared_memory.SharedMemory(create=True, size=data.nbytes)
+    shared_data = np.ndarray(data.shape, dtype=data.dtype, buffer=shm.buf)
+    np.copyto(shared_data, data)
+    return shm, shared_data
+
+def test_model_shared(model, shm_names, combo_indices, shape_train, shape_test, shape_ytrain, shape_ytest):
+    # Access shared memory
+    X_train_shm = shared_memory.SharedMemory(name=shm_names['X_train'])
+    X_test_shm = shared_memory.SharedMemory(name=shm_names['X_test'])
+    y_train_shm = shared_memory.SharedMemory(name=shm_names['y_train'])
+    y_test_shm = shared_memory.SharedMemory(name=shm_names['y_test'])
+
+    # Reconstruct arrays from shared memory
+    # Assuming data types and shapes are known, replace with actual types and shapes
+    X_train = np.ndarray(shape_train, dtype=np.float64, buffer=X_train_shm.buf)[:, combo_indices]
+    X_test = np.ndarray(shape_test, dtype=np.float64, buffer=X_test_shm.buf)[:, combo_indices]
+    y_train = np.ndarray(shape_ytrain, dtype=np.float64, buffer=y_train_shm.buf)
+    y_test = np.ndarray(shape_ytest, dtype=np.float64, buffer=y_test_shm.buf)
+
+    # Test the model (replace with actual testing logic)
+    model = model()
+    result = test_model(combo_indices, model, X_train, X_test, y_train, y_test)
+
+    # Close shared memory (data remains accessible)
+    X_train_shm.close()
+    X_test_shm.close()
+    y_train_shm.close()
+    y_test_shm.close()
+
+    return result
 
 
-def test_models_with_feature_combinations(dataset, preprocess_function, postprocess_function, models):
+def test_model(feature_combination, model, X_train, X_test, y_train, y_test):
+    model.fit(X_train,y_train)
+    predictions = model.predict(X_test)
+    mse = mean_squared_error(y_test, predictions)
+    r2 = r2_score(y_test, predictions)
+    logger.info("Model: %s, Features: %s, MSE: %s, R2: %s", model.__class__.__name__, feature_combination, mse, r2)
+    results = {
+             'features': feature_combination,
+             'model': model.__class__.__name__,
+             'MSE': mse,
+             'R2': r2
+         }
+    if model.__class__.__name__ == ("LassoCV" or "ElasticNetCV" or "RidgeCV"):
+        results['alpha'] = model.alpha_
+
+    return results
+
+def all_feature_combinations(train_features):
+    """
+    Generate all possible combinations of feature indices from the given design matrix.
+
+    Parameters:
+    train_features (array-like): The design matrix with N features.
+
+    Returns:
+    list of tuples: A list containing tuples, each tuple represents a combination of feature indices.
+    """
+    n_features = train_features.shape[1]
+    feature_indices = range(n_features)
+    all_combinations = []
+
+    # Generate combinations for all possible lengths
+    for r in range(1, n_features + 1):
+        all_combinations.extend(combinations(feature_indices, r))
+
+    return all_combinations
+
+
+
+def run_tests_parallel(models_to_test, X_train, X_test, y_train, y_test):
+    feature_combos = all_feature_combinations(X_train)
     results = []
 
-    preprocessed_train = preprocess_function(dataset['train'])
-    postprocessed_train = postprocess_function(preprocessed_train)
+    logger.info("Creating shared memory")
+    X_train_shm, X_train_shared = shared_memory_array(X_train)
+    X_test_shm, X_test_shared = shared_memory_array(X_test)
+    y_train_shm, y_train_shared = shared_memory_array(y_train)
+    y_test_shm, y_test_shared = shared_memory_array(y_test)
 
-    preprocessed_test = preprocess_function(dataset['test'])
-    postprocessed_test = postprocess_function(preprocessed_test)
+    shm_names = {
+        'X_train': X_train_shm.name,
+        'X_test': X_test_shm.name,
+        'y_train': y_train_shm.name,
+        'y_test': y_test_shm.name
+    }
+    logger.info("There are %s feature combinations to test", len(feature_combos))
+    if len(feature_combos) > 4096: #12 features
+        raise ValueError("Too many feature combinations to test. There are %s features.", X_train.shape[1])
 
-    # Fill NaN values if any
-    postprocessed_train = postprocessed_train.fillna(0)
-    postprocessed_test = postprocessed_test.fillna(0)
+    for model in models_to_test:
+        logger.info("Testing model: %s", model)
+        with ProcessPoolExecutor() as executor:
+            futures = [executor.submit(test_model_shared, model, shm_names, combo, X_train.shape, X_test.shape, y_train.shape, y_test.shape) 
+                       for combo in feature_combos]
+            
+            for future in futures:
+                results.append(future.result())
+    
+    # Cleanup shared memory
+    X_train_shm.close()
+    X_train_shm.unlink()
+    X_test_shm.close()
+    X_test_shm.unlink()
+    y_train_shm.close()
+    y_train_shm.unlink()
+    y_test_shm.close()
+    y_test_shm.unlink()
+    return pd.DataFrame(results)
 
-    # Extract features and targets
-    train_features = [
-        col for col in postprocessed_train.columns if col.startswith('scores_')]
-    test_features = [
-        col for col in postprocessed_test.columns if col.startswith('scores_')]
-    score_to_predict = postprocessed_train['scores']
-    score_to_verify = postprocessed_test['scores']
+def is_fitted(estimator):
+    try:
+        check_is_fitted(estimator)
+        return True
+    except NotFittedError:
+        return False
+    
+def run_other_tests_in_parallel(X_train, X_test, y_train, y_test):
+    
+    lassoCV_r2 = LassoCV(alphas=np.linspace(0.0001, 1000, 100), cv=10, max_iter=10000)
+    elasticNetCV_r2 = ElasticNetCV(alphas=np.linspace(0.0001, 1000, 100), cv=10, max_iter=10000)
+    ridgeCV_r2 = RidgeCV(alphas=np.linspace(0.0001, 1000, 100), cv=10)
+    models = [lassoCV_r2, elasticNetCV_r2, ridgeCV_r2]
 
-    logger.debug(f"score_to_predict.keys: %s", score_to_predict.keys())
-
-    # Iterate over all combinations of features
-    for r in range(1, len(train_features) + 1):
-        logger.debug(f"r: %s", r)
-        for feature_combination in combinations(train_features, r):
-            logger.debug(
-                f"feature_combination: %s", feature_combination)
-            if len(feature_combination) > 3:
-                raise RuntimeError("STOP, hammer time!")
-
-            train_x = postprocessed_train[list(feature_combination)]
-            test_x = postprocessed_test[list(feature_combination)]
-
-            for model in models:
-                logger.debug(
-                    f"model: {model}, features: {feature_combination}")
-                model_instance = model()
-                logger.debug(f"train_x.shape: %s", train_x.shape)
-                logger.debug(f"score_to_predict.shape: %s",
-                             score_to_predict.shape)
-                model_instance.fit(train_x, score_to_predict)
-                predictions = model_instance.predict(test_x)
-
-                mse = mean_squared_error(score_to_verify, predictions)
-                r2 = r2_score(score_to_verify, predictions)
-
-                results.append({
-                    'features': feature_combination,
-                    'model': model.__name__,
-                    'MSE': mse,
-                    'R2': r2
-                })
+    results = []
+    logger.info("Testing other models")
+    with ProcessPoolExecutor() as executor:
+        futures = [executor.submit(test_model, [], model, X_train, X_test, y_train, y_test) for model in models]
+        
+        for future in futures:
+            results.append(future.result())
+    
 
     return pd.DataFrame(results)
 
-another_set = {
-    'train': dataset['train'],
-    'test': dataset['test']
-}
+def test_models_with_feature_combinations(dataset, preprocess_function, postprocess_function):
 
-models_to_test = [LinearRegression, Ridge, DecisionTreeRegressor]
+    if "train_features.npy" in os.listdir() and "test_features.npy" in os.listdir() and "train_features.npy" in os.listdir() and "test_features.npy" in os.listdir():
+        logger.info("Loading train_features.npy")
+        train_features = load_numpy_array("train_features.npy")
 
-# logger.debug(f"Starting to combine model. Models: %s", models_to_test)
+        logger.info("Loading test_features.npy")
+        test_features = load_numpy_array("test_features.npy")
 
-# results_df = test_models_with_feature_combinations(
-#     another_set, extract_features, post_process_data, models_to_test)
+        logger.info("Loading score_to_predict.npy")
+        score_to_predict = load_numpy_array("score_to_predict.npy")
 
-# results_df
+        logger.info("Loading score_to_verify.npy")
+        score_to_verify = load_numpy_array("score_to_verify.npy")
+
+    else:
+
+        logger.info("preprocessing training set")
+        preprocessed_train = preprocess_function(dataset['train'])
+
+
+        logger.info("postprocessing training set")
+        postprocessed_train = postprocess_function(preprocessed_train)
+
+        logger.info("preprocessing test set")
+        preprocessed_test = preprocess_function(dataset['test'])
+
+        logger.info("postprocessing test set")
+        postprocessed_test = postprocess_function(preprocessed_test)
+
+        # Fill NaN values if any
+        postprocessed_train = postprocessed_train.fillna(0)
+        postprocessed_test = postprocessed_test.fillna(0)
+
+        # Extract features and targets
+        logger.info("Extracting features and targets")
+        # log scores name
+        logger.info("Scores names: %s", [col for col in postprocessed_train.columns if col.startswith('scores_')])
+        train_features = postprocessed_train[[col for col in postprocessed_train.columns if col.startswith('scores_')]].to_numpy()
+
+        test_features = postprocessed_test[[
+            col for col in postprocessed_test.columns if col.startswith('scores_')]].to_numpy()
+        score_to_predict = postprocessed_train['scores']
+        score_to_verify = postprocessed_test['scores']
+
+        save_numpy_array(train_features, "train_features.npy")
+        save_numpy_array(test_features, "test_features.npy")
+        save_numpy_array(score_to_predict, "score_to_predict.npy")
+        save_numpy_array(score_to_verify, "score_to_verify.npy")
+
+    # Iterate over all combinations of features
+
+    logger.debug("Running tests in parallel")
+    models_to_test_combinations = [LinearRegression, RidgeCV, DecisionTreeRegressor, LassoCV, ElasticNetCV]
+    if("result1.pkl" in os.listdir()):
+        logger.info("Loading result1.pkl")
+        result1 = pd.read_pickle("result1.pkl")
+    else:
+        result1 = run_tests_parallel(models_to_test_combinations, train_features, test_features, score_to_predict, score_to_verify)
+        pd.DataFrame(result1).to_pickle("result1.pkl")
+
+    
+    return result1
