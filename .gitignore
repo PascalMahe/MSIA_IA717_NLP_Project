@@ -2,3 +2,6 @@ Stsbenchmark.tar.gz
 stsbenchmark/
 Common part.ipynb
 STS_project_2023.ipynb
+__pycache__/
+.ipynb_checkpoints/
+NLP STS_project_2023_biomed_team.ipynb
