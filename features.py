@@ -29,7 +29,7 @@ from concurrent.futures import ProcessPoolExecutor
 from logger import logger
 from sklearn.utils.validation import check_is_fitted
 from sklearn.exceptions import NotFittedError
-
+from rouge_score import rouge_scorer
 # if punkt is missing we download all packages
 try:
     nltk.data.find('tokenizers/punkt')
@@ -60,6 +60,24 @@ def load_data():
     return data
 
 
+def preprocess_sentence_no_stem(sentence):
+    # tokenize and lower case
+    tokens = word_tokenize(sentence.lower())
+    # stemming and removing stop words
+    stemmed_tokens = [token for token in tokens if not token in set(
+        stopwords.words('english'))]
+    
+        
+    for token in stemmed_tokens:
+        if token == "n t":
+            token="not"
+        elif token == "m":
+            token = "am"
+    # remove punctuations
+    filtered_tokens = [token for token in stemmed_tokens if token not in punctuation]
+    
+    return ' '.join(filtered_tokens)
+
 def preprocess_sentence(sentence):
     stemmer = PorterStemmer()
     # tokenize and lower case
@@ -82,6 +100,11 @@ def preprocess_sentence(sentence):
 
 
 def preprocess_dataset(dataset):
+
+    if("preproc.pkl" in os.listdir()):
+        logger.info("Loading preprocessed dataset")
+        return pd.read_pickle("preproc.pkl")
+    
     df = pd.DataFrame(dataset)
 
     df[['s1', 's2']] = df['data'].apply(lambda x: pd.Series(x))
@@ -89,6 +112,8 @@ def preprocess_dataset(dataset):
     # preprocessing des phrases 1 et 2 en vecteur ou string :
     df['token_1'] = df['s1'].apply(preprocess_sentence)  # vecteur
     df['token_2'] = df['s2'].apply(preprocess_sentence)  # vecteur
+    df['nostem_1'] = df['s1'].apply(preprocess_sentence_no_stem)
+    df['nostem_2'] = df['s2'].apply(preprocess_sentence_no_stem)
     df['token_m'] = df['sm'].apply(preprocess_sentence)  # vecteur
     df['s1_pp'] = df['token_1'].apply(' '.join)  # string
     df['s2_pp'] = df['token_2'].apply(' '.join)  # string
@@ -113,6 +138,8 @@ def preprocess_dataset(dataset):
 
     logger.info("Indices dropped:")
     logger.info(dropped_indexes)
+
+    df.to_pickle("preproc.pkl")
 
     return df
 
@@ -317,15 +344,6 @@ def feature0_scores(df):
     x = []
     for i in df.index:
         s1 = df["s1_pp"][i]
-        try:
-            s1 = df["s1_pp"][i]
-        # s1 = df['s1'][i]
-        except:
-            logger.info(f"error while trying to access: df[\"s1_pp\"][{i}]")
-            logger.info(f"before: {i-1}, Valeur: {df['s1'][i-1]}")
-            logger.info(f"df[\"s1_pp\"].length: {len(df['s1_pp'])}")
-
-            exit()
         s2 = df["s2_pp"][i]
         if len(s1) or len(s2):
             jacc_score = 0
@@ -337,6 +355,50 @@ def feature0_scores(df):
         x.append(jacc_score)
 
     df["scores_0"] = x
+    return df
+
+from gensim.models import KeyedVectors
+
+
+def feature_rougeL(df):
+    scorer = rouge_scorer.RougeScorer(['rougeL'], use_stemmer=True) #, 'rougeS'
+
+    for i in df.index:
+        reference_summary = df['s1_pp'][i]
+        candidate_summary = df['s2_pp'][i]
+        scores = scorer.score(reference_summary, candidate_summary)
+
+        df.loc[i, 'scores_rougeL'] = scores['rougeL'].fmeasure
+
+    return df
+
+def WMD_score(df,m=1):
+    """Calcule la distance WMD et les scores associé entre les phrases de 2 colonnes
+    Attributes:
+        df: The pandas dataframe
+        m: coefficient for the exponential score
+    """
+    
+
+#path = 'c:\Users\anaele.baudant\GoogleNews-vectors-negative300\GoogleNews-vectors-negative300.bin\'
+    file='GoogleNews-vectors-negative300.bin'
+
+    # Load vectors directly from the file
+    model = KeyedVectors.load_word2vec_format(file, binary=True) 
+    for i in df.index:
+
+        s1v=df["nostem_1"].iloc[i]
+        s2v=df["nostem_2"].iloc[i]
+        #retire les mots pas dans le vocabulaire
+        s1v=[word for word in s1v if word in model.key_to_index]
+        s2v=[word for word in s2v if word in model.key_to_index]
+        #calcule distance WMD
+        distance_wmd = model.wmdistance(s1v,s2v)
+        df.loc[i, 'distance_WMD'] = distance_wmd / ((len(s1v)*len(s2v))+1)
+        #transformation distance en score normalisé (entre 0 et 1)
+        df.loc[i, 'scores_WMD_inv'] = 1-distance_wmd
+        #df.loc[i, 'scores_WMD_exp'] = np.exp(-distance_wmd*m)
+    #df['scores_WMD_max'] = 1-df['distance_WMD']/df['distance_WMD'].max()
     return df
 
 
@@ -463,9 +525,7 @@ def replace_with_synonyms(s1, s2):
 
 def n_gram_overlap(df, corpus, synonym_based=False):
     # Create a CountVectorizer with different N-gram values (1, 2, and 3)
-    vectorizers = [CountVectorizer(ngram_range=(1, 1)),
-                   CountVectorizer(ngram_range=(1, 2)),
-                   CountVectorizer(ngram_range=(1, 3))]
+    vectorizers = [CountVectorizer(ngram_range=(1, 3))]
 
     for i, vectorizer in enumerate(vectorizers):
         # Fit the vectorizer with the corpus
@@ -617,7 +677,7 @@ def feature7_scores(preprocessed_data):
     preprocessed_data['scores_7'] = similarity_scores
 
     return preprocessed_data
-
+from co_occurrence_matrix import create_vocabulary, co_occurence_matrix, assign_distributional_vectors
 # Extract features
 def extract_features(dataset):
     preprocessed_dataset = preprocess_dataset(dataset)
@@ -633,7 +693,8 @@ def extract_features(dataset):
         preprocessed_dataset, corpus, synonym_based=True)
     preprocessed_dataset = feature6_scores(preprocessed_dataset)
     preprocessed_dataset = feature7_scores(preprocessed_dataset)
-
+    preprocessed_dataset = WMD_score(preprocessed_dataset,m=1)
+    preprocessed_dataset = feature_rougeL(preprocessed_dataset)
     return preprocessed_dataset
 
 
@@ -642,13 +703,17 @@ def post_process_data(df):
     # Ahmed here : I suggest to just drop the columns that we don't need by name
     # because i have many variants of scores and i can't align to this naming convention
     columns_to_normalize = []
-    for i in range(7):
-        current_column_name = "scores_" + str(i)
-        if current_column_name in df.columns:
-            columns_to_normalize.append(current_column_name)
 
-    df[columns_to_normalize] = StandardScaler(
-    ).fit_transform(df[columns_to_normalize])
+    logger.info("There are %s columns", df.columns)
+    for col in df.columns:
+        if col.startswith('scores_'):
+            columns_to_normalize.append(col)
+
+    if(len(columns_to_normalize) == 0):
+        raise ValueError("No columns to normalize")
+    
+    logger.info("Normalizing columns: %s", columns_to_normalize)
+    df[columns_to_normalize] = StandardScaler().fit_transform(df[columns_to_normalize])
     return df
 
 
@@ -698,8 +763,12 @@ def test_model(feature_combination, model, X_train, X_test, y_train, y_test):
              'MSE': mse,
              'R2': r2
          }
+    if hasattr(model, 'coef_'):
+        results['thetas'] = model.coef_
+
     if model.__class__.__name__ == ("LassoCV" or "ElasticNetCV" or "RidgeCV"):
-        results['alpha'] = model.alpha_
+        if hasattr(model, 'alpha_'):
+            results['alpha'] = model.alpha_
 
     return results
 
@@ -742,9 +811,6 @@ def run_tests_parallel(models_to_test, X_train, X_test, y_train, y_test):
         'y_test': y_test_shm.name
     }
     logger.info("There are %s feature combinations to test", len(feature_combos))
-    if len(feature_combos) > 4096: #12 features
-        raise ValueError("Too many feature combinations to test. There are %s features.", X_train.shape[1])
-
     for model in models_to_test:
         logger.info("Testing model: %s", model)
         with ProcessPoolExecutor() as executor:
@@ -792,7 +858,7 @@ def run_other_tests_in_parallel(X_train, X_test, y_train, y_test):
 
 def test_models_with_feature_combinations(dataset, preprocess_function, postprocess_function):
 
-    if "train_features.npy" in os.listdir() and "test_features.npy" in os.listdir() and "train_features.npy" in os.listdir() and "test_features.npy" in os.listdir():
+    if "postprocessed_train.pkl" in os.listdir() and "train_features.npy" in os.listdir() and "test_features.npy" in os.listdir() and "train_features.npy" in os.listdir() and "test_features.npy" in os.listdir():
         logger.info("Loading train_features.npy")
         train_features = load_numpy_array("train_features.npy")
 
@@ -804,6 +870,9 @@ def test_models_with_feature_combinations(dataset, preprocess_function, postproc
 
         logger.info("Loading score_to_verify.npy")
         score_to_verify = load_numpy_array("score_to_verify.npy")
+
+        logger.info("postprocessed_train.pkl")
+        postprocessed_train = pd.read_pickle("postprocessed_train.pkl")
 
     else:
 
@@ -828,6 +897,7 @@ def test_models_with_feature_combinations(dataset, preprocess_function, postproc
         logger.info("Extracting features and targets")
         # log scores name
         logger.info("Scores names: %s", [col for col in postprocessed_train.columns if col.startswith('scores_')])
+
         train_features = postprocessed_train[[col for col in postprocessed_train.columns if col.startswith('scores_')]].to_numpy()
 
         test_features = postprocessed_test[[
@@ -835,6 +905,7 @@ def test_models_with_feature_combinations(dataset, preprocess_function, postproc
         score_to_predict = postprocessed_train['scores']
         score_to_verify = postprocessed_test['scores']
 
+        postprocessed_train.to_pickle("postprocessed_train.pkl")
         save_numpy_array(train_features, "train_features.npy")
         save_numpy_array(test_features, "test_features.npy")
         save_numpy_array(score_to_predict, "score_to_predict.npy")
@@ -842,6 +913,12 @@ def test_models_with_feature_combinations(dataset, preprocess_function, postproc
 
     # Iterate over all combinations of features
 
+    scores_name = dict()
+    i = 0
+    for col, indice in zip(postprocessed_train.columns, range(len(postprocessed_train.columns))):
+        if col.startswith('scores_'):
+            scores_name[i] = col
+            i+=1
     logger.debug("Running tests in parallel")
     models_to_test_combinations = [LinearRegression, RidgeCV, DecisionTreeRegressor, LassoCV, ElasticNetCV]
     if("result1.pkl" in os.listdir()):
@@ -852,4 +929,4 @@ def test_models_with_feature_combinations(dataset, preprocess_function, postproc
         pd.DataFrame(result1).to_pickle("result1.pkl")
 
     
-    return result1
+    return result1, scores_name
