@@ -30,6 +30,8 @@ from logger import logger
 from sklearn.utils.validation import check_is_fitted
 from sklearn.exceptions import NotFittedError
 from rouge_score import rouge_scorer
+import statsmodels.api as sm
+
 # if punkt is missing we download all packages
 try:
     nltk.data.find('tokenizers/punkt')
@@ -100,11 +102,7 @@ def preprocess_sentence(sentence):
 
 
 def preprocess_dataset(dataset):
-
-    if("preproc.pkl" in os.listdir()):
-        logger.info("Loading preprocessed dataset")
-        return pd.read_pickle("preproc.pkl")
-    
+   
     df = pd.DataFrame(dataset)
 
     df[['s1', 's2']] = df['data'].apply(lambda x: pd.Series(x))
@@ -340,21 +338,21 @@ def show_top_error(df, initial, feature):
 
 # the function given to compute the jaccard_score score doesn't work as is for the dataframe
 # it's (barely) rewritten here to make it work
+
 def feature0_scores(df):
-    x = []
     for i in df.index:
-        s1 = df["s1_pp"][i]
-        s2 = df["s2_pp"][i]
-        if len(s1) or len(s2):
+        s1 = df["s1"][i]
+        s2 = df["s2"][i]
+        if (len(s1)) == 0 or (len(s2)==0):
             jacc_score = 0
         else:
             # binary=True because we use Jaccard score (we want presence/absence information, not counts)
             cv = CountVectorizer(binary=True)
             vectors = cv.fit_transform([s1, s2]).toarray()
             jacc_score = jaccard_score(vectors[0], vectors[1])
-        x.append(jacc_score)
 
-    df["scores_0"] = x
+        df.loc[i, 'scores_0'] = jacc_score
+
     return df
 
 from gensim.models import KeyedVectors
@@ -366,7 +364,7 @@ def feature_rougeL(df):
     for i in df.index:
         reference_summary = df['s1_pp'][i]
         candidate_summary = df['s2_pp'][i]
-        scores = scorer.score(reference_summary, candidate_summary)
+        scores = scorer.score(str(reference_summary), str(candidate_summary))
 
         df.loc[i, 'scores_rougeL'] = scores['rougeL'].fmeasure
 
@@ -385,10 +383,8 @@ def WMD_score(df,m=1):
 
     # Load vectors directly from the file
     model = KeyedVectors.load_word2vec_format(file, binary=True) 
-    for i in df.index:
+    for i, (s1v,s2v) in enumerate(zip(df["nostem_1"],df["nostem_2"])):
 
-        s1v=df["nostem_1"].iloc[i]
-        s2v=df["nostem_2"].iloc[i]
         #retire les mots pas dans le vocabulaire
         s1v=[word for word in s1v if word in model.key_to_index]
         s2v=[word for word in s2v if word in model.key_to_index]
@@ -682,7 +678,7 @@ from co_occurrence_matrix import create_vocabulary, co_occurence_matrix, assign_
 def extract_features(dataset):
     preprocessed_dataset = preprocess_dataset(dataset)
     corpus = get_corpus(preprocessed_dataset)
-
+    
     preprocessed_dataset = feature0_scores(preprocessed_dataset)
     preprocessed_dataset = feature1_scores(preprocessed_dataset)
     preprocessed_dataset = feature2_scores(preprocessed_dataset)
@@ -693,7 +689,7 @@ def extract_features(dataset):
         preprocessed_dataset, corpus, synonym_based=True)
     preprocessed_dataset = feature6_scores(preprocessed_dataset)
     preprocessed_dataset = feature7_scores(preprocessed_dataset)
-    preprocessed_dataset = WMD_score(preprocessed_dataset,m=1)
+    preprocessed_dataset = WMD_score(preprocessed_dataset,m=25)
     preprocessed_dataset = feature_rougeL(preprocessed_dataset)
     return preprocessed_dataset
 
@@ -752,17 +748,24 @@ def test_model_shared(model, shm_names, combo_indices, shape_train, shape_test, 
 
 
 def test_model(feature_combination, model, X_train, X_test, y_train, y_test):
+
     model.fit(X_train,y_train)
+
     predictions = model.predict(X_test)
-    mse = mean_squared_error(y_test, predictions)
-    r2 = r2_score(y_test, predictions)
-    logger.info("Model: %s, Features: %s, MSE: %s, R2: %s", model.__class__.__name__, feature_combination, mse, r2)
+    prediction_train = model.predict(X_train)
+    mse_train = mean_squared_error(y_train, prediction_train,multioutput='raw_values')
+    r2_train = r2_score(y_train, prediction_train)
+    mse_test = mean_squared_error(y_test, predictions, multioutput='raw_values')
+    r2_test = r2_score(y_test, predictions)
     results = {
              'features': feature_combination,
              'model': model.__class__.__name__,
-             'MSE': mse,
-             'R2': r2
+             'MSE_train': mse_train,
+             'MSE': mse_test,
+             'R2_train': r2_train,
+             'R2': r2_test
          }
+    
     if hasattr(model, 'coef_'):
         results['thetas'] = model.coef_
 
@@ -856,6 +859,134 @@ def run_other_tests_in_parallel(X_train, X_test, y_train, y_test):
 
     return pd.DataFrame(results)
 
+def test_models_simple(dataset, preprocess_function, postprocess_function):
+    if "postprocessed_train.pkl" in os.listdir() and "train_features.npy" in os.listdir() and "test_features.npy" in os.listdir() and "train_features.npy" in os.listdir() and "test_features.npy" in os.listdir():
+        logger.info("Loading train_features.npy")
+        train_features = load_numpy_array("train_features.npy")
+
+        logger.info("Loading test_features.npy")
+        test_features = load_numpy_array("test_features.npy")
+
+        logger.info("Loading score_to_predict.npy")
+        score_to_predict = load_numpy_array("score_to_predict.npy")
+
+        logger.info("Loading score_to_verify.npy")
+        score_to_verify = load_numpy_array("score_to_verify.npy")
+
+        logger.info("postprocessed_train.pkl")
+        postprocessed_train = pd.read_pickle("postprocessed_train.pkl")
+
+    else:
+
+        logger.info("preprocessing training set")
+        preprocessed_train = preprocess_function(dataset['train'])
+
+
+        logger.info("postprocessing training set")
+        postprocessed_train = postprocess_function(preprocessed_train)
+
+        logger.info("preprocessing test set")
+        preprocessed_test = preprocess_function(dataset['test'])
+
+        logger.info("postprocessing test set")
+        postprocessed_test = postprocess_function(preprocessed_test)
+
+        # Fill NaN values if any
+        postprocessed_train = postprocessed_train.fillna(0)
+        postprocessed_test = postprocessed_test.fillna(0)
+
+        # Extract features and targets
+        logger.info("Extracting features and targets")
+        # log scores name
+        logger.info("Scores names: %s", [col for col in postprocessed_train.columns if col.startswith('scores_')])
+
+        train_features = postprocessed_train[[col for col in postprocessed_train.columns if col.startswith('scores_')]].to_numpy()
+
+        test_features = postprocessed_test[[
+            col for col in postprocessed_test.columns if col.startswith('scores_')]].to_numpy()
+        score_to_predict = postprocessed_train['GroundTruthScore']
+        score_to_verify = postprocessed_test['GroundTruthScore']
+
+        postprocessed_train.to_pickle("postprocessed_train.pkl")
+        save_numpy_array(train_features, "train_features.npy")
+        save_numpy_array(test_features, "test_features.npy")
+        save_numpy_array(score_to_predict, "score_to_predict.npy")
+        save_numpy_array(score_to_verify, "score_to_verify.npy")
+
+    # Iterate over all combinations of features
+
+    scores_name = dict()
+    i = 0
+    for col, indice in zip(postprocessed_train.columns, range(len(postprocessed_train.columns))):
+        if col.startswith('scores_'):
+            scores_name[i] = col
+            i+=1
+    logger.debug("Running tests in parallel")
+
+    #inspect the data here
+    df = pd.DataFrame(train_features)
+    df2 = pd.DataFrame(test_features)
+
+    #plot score_0
+    plt.plot(df.iloc[:,0], label='train')
+    plt.show()
+    plt.plot(df2.iloc[:,0], label='test')
+    plt.show()
+    # run linear regression for each feature
+    model = LinearRegression()
+    results = []
+    for i in range(train_features.shape[1]):
+        model.fit(sm.add_constant(train_features[:,i]), score_to_predict)
+        prediction_train = model.predict(sm.add_constant(train_features[:,i]))
+        prediction = model.predict(sm.add_constant(test_features[:,i]))
+
+        mse = mean_squared_error(score_to_verify, prediction)
+        r2 = r2_score(score_to_verify, prediction)
+        result = {
+            'features': [i],
+            'model': model.__class__.__name__,
+            'MSE_train': mean_squared_error(score_to_predict,prediction_train),
+            'MSE': mean_squared_error(score_to_verify, prediction),
+            'R2_train': r2_score(score_to_predict, prediction_train),
+            'R2': r2_score(score_to_verify, prediction),
+            'thetas': model.coef_
+        }
+        results.append(result)
+    single_feature_results = pd.DataFrame(results)
+
+    # run ridge lasso and elastic net for the whole dataset
+    linear = LinearRegression()
+    lassoCV_r2 = LassoCV(alphas=np.log(np.logspace(0.001, 100, 100)), cv=10, max_iter=10000)
+    elasticNetCV_r2 = ElasticNetCV(alphas=np.log(np.logspace(0.001, 100, 100)), cv=10, max_iter=10000)
+    ridgeCV_r2 = RidgeCV(alphas=np.log(np.logspace(0.001, 100, 100)), cv=10)
+    models = [linear, lassoCV_r2, elasticNetCV_r2, ridgeCV_r2]
+
+    results = []
+    logger.info("Testing other models")
+    for model in models:
+        model.fit(train_features, score_to_predict)
+        prediction_train = model.predict(train_features)
+        prediction = model.predict(test_features)
+        mse = mean_squared_error(score_to_verify, prediction)
+        r2 = r2_score(score_to_verify, prediction)
+        result = {
+            'features': [i for i in range(train_features.shape[1])],
+            'model': model.__class__.__name__,
+            'MSE_train': mean_squared_error(score_to_predict,prediction_train),
+            'MSE': mean_squared_error(score_to_verify, prediction),
+            'R2_train': r2_score(score_to_predict, prediction_train),
+            'R2': r2_score(score_to_verify, prediction),
+            'thetas': model.coef_
+        }
+        if model.__class__.__name__ == ("LassoCV" or "ElasticNetCV" or "RidgeCV"):
+            if hasattr(model, 'alpha_'):
+                result['alpha'] = model.alpha_
+        results.append(result)
+    
+    whole_dataset_results = pd.DataFrame(results)
+    return single_feature_results, whole_dataset_results, scores_name
+
+
 def test_models_with_feature_combinations(dataset, preprocess_function, postprocess_function):
 
     if "postprocessed_train.pkl" in os.listdir() and "train_features.npy" in os.listdir() and "test_features.npy" in os.listdir() and "train_features.npy" in os.listdir() and "test_features.npy" in os.listdir():
@@ -902,8 +1033,8 @@ def test_models_with_feature_combinations(dataset, preprocess_function, postproc
 
         test_features = postprocessed_test[[
             col for col in postprocessed_test.columns if col.startswith('scores_')]].to_numpy()
-        score_to_predict = postprocessed_train['scores']
-        score_to_verify = postprocessed_test['scores']
+        score_to_predict = postprocessed_train['GroundTruthScore']
+        score_to_verify = postprocessed_test['GroundTruthScore']
 
         postprocessed_train.to_pickle("postprocessed_train.pkl")
         save_numpy_array(train_features, "train_features.npy")
