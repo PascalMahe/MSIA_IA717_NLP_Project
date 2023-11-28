@@ -37,12 +37,9 @@ try:
     nltk.data.find('tokenizers/punkt')
 except LookupError:
     nltk.download('punkt')
-    nltk.download('punkt')
     nltk.download('stopwords')
     nltk.download('wordnet')
     nltk.download('averaged_perceptron_tagger')
-    nltk.download('wordnet')
-
 
 def load_data():
     data = dict()
@@ -673,7 +670,7 @@ def feature7_scores(preprocessed_data):
     preprocessed_data['scores_7'] = similarity_scores
 
     return preprocessed_data
-from co_occurrence_matrix import create_vocabulary, co_occurence_matrix, assign_distributional_vectors
+#ANAELE-from co_occurrence_matrix import create_vocabulary, co_occurence_matrix, assign_distributional_vectors
 # Extract features
 def extract_features(dataset):
     preprocessed_dataset = preprocess_dataset(dataset)
@@ -991,7 +988,7 @@ def test_models_with_feature_combinations(dataset, preprocess_function, postproc
 
     if "postprocessed_train.pkl" in os.listdir() and "train_features.npy" in os.listdir() and "test_features.npy" in os.listdir() and "train_features.npy" in os.listdir() and "test_features.npy" in os.listdir():
         logger.info("Loading train_features.npy")
-        train_features = load_numpy_array("train_features.npy")
+        80
 
         logger.info("Loading test_features.npy")
         test_features = load_numpy_array("test_features.npy")
